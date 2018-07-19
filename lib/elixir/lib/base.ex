@@ -98,6 +98,9 @@ defmodule Base do
   b32_alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
   b32hex_alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUV'
 
+  @a85_start "<~"
+  @a85_end "~>"
+
   defmacrop encode_pair(alphabet, case, value) do
     quote do
       case unquote(value) do
@@ -778,6 +781,64 @@ defmodule Base do
     do_decode32hex(case, string, pad?)
   end
 
+  @doc """
+  Encodes a binary string into a base 85 encoded string with an
+  extended hexadecimal alphabet.
+
+  ## Options
+
+  The accepted options are:
+
+    * `:delimited` - specifies whether or not to include Ascii85 delimiters
+
+  The values for `:delimited` can be:
+
+    * `true` - include the delimiters
+    * `false` - omit the delimiters
+
+  ## Examples
+
+      iex> Base.encode85!("foobar")
+      "<~AoDTs@<)~>"
+
+      iex> Base.encode85!("foobar", delimited: false)
+      "AoDTs@<)"
+  """
+  @spec encode85!(binary, keyword) :: binary
+  def encode85!(data, opts \\ []) when is_binary(data) do
+    delimited? = Keyword.get(opts, :delimited, false)
+    do_encode85(data, delimited?)
+  end
+
+  @doc """
+  Decodes a base 85 encoded string with extended hexadecimal alphabet
+  into a binary string.
+
+  ## Options
+
+  The accepted options are:
+
+    * `:delimited` - specifies whether or not to include Ascii85 delimiters
+
+  The values for `:delimited` can be:
+
+    * `true` - include the delimiters
+    * `false` - omit the delimiters
+
+  ## Examples
+
+      iex> Base.decode85!("<~AoDTs@<)~>")
+      "foobar"
+
+      iex> Base.decode85!("AoDTs@<)", delimited: false)
+      "foobar"
+  """
+  @spec decode85!(binary, keyword) :: binary
+  def decode85!(string, opts \\ []) when is_binary(string) do
+    delimited? = Keyword.get(opts, :delimited, false)
+    do_decode85(string, delimited?)
+  end
+
   defp remove_ignored(string, nil), do: string
 
   defp remove_ignored(string, :whitespace) do
@@ -1283,5 +1344,75 @@ defmodule Base do
           raise ArgumentError, "incorrect padding"
       end
     end
+  end
+
+  defp do_encode85(binary, true) do
+    @a85_start <> do_encode85(binary) <> @a85_end
+  end
+
+  defp do_encode85(binary, _) do
+    do_encode85(binary)
+  end
+
+  defp do_encode85(<<partial::bitstring-size(8)>>) do
+    (partial <> <<0, 0, 0>>) |> do_encode85 |> :binary.part(0, 5 - 3)
+  end
+
+  defp do_encode85(<<partial::bitstring-size(16)>>) do
+    (partial <> <<0, 0>>) |> do_encode85 |> :binary.part(0, 5 - 2)
+  end
+
+  defp do_encode85(<<partial::bitstring-size(24)>>) do
+    (partial <> <<0>>) |> do_encode85 |> :binary.part(0, 5 - 1)
+  end
+
+  defp do_encode85(<<chunk::big-unsigned-integer-size(32), rest::binary>>) do
+    do_encode85_chunk(chunk) <> do_encode85(rest)
+  end
+
+  defp do_encode85_chunk(n) do
+    do_encode85_chunk(n, 5)
+  end
+
+  defp do_encode85_chunk(_n, 0), do: <<>>
+
+  defp do_encode85_chunk(n, digits) do
+    last = rem(n, 85)
+    rest = div(n, 85)
+    do_encode85_chunk(rest, digits - 1) <> <<last + 33>>
+  end
+
+  defp do_decode85(binary, true) do
+    binary = @a85_start <> binary <> @a85_end
+    do_decode85(binary)
+  end
+
+  defp do_decode85(binary, _) do
+    do_decode85(binary)
+  end
+
+  defp do_decode85(<<>>), do: <<>>
+
+  defp do_decode85(<<partial::bitstring-size(16)>>) do
+    (partial <> "uuu") |> do_decode85 |> :binary.part(0, 4 - 3)
+  end
+
+  defp do_decode85(<<partial::bitstring-size(24)>>) do
+    (partial <> "uu") |> do_decode85 |> :binary.part(0, 4 - 2)
+  end
+
+  defp do_decode85(<<partial::bitstring-size(32)>>) do
+    (partial <> "u") |> do_decode85 |> :binary.part(0, 4 - 1)
+  end
+
+  defp do_decode85(<<chunk::bitstring-size(40), rest::binary>>) do
+    <<do_decode85_chunk(chunk)::big-unsigned-integer-size(32)>> <> do_decode85(rest)
+  end
+
+  # base-85 ASCII to 32-bit integer.
+  defp do_decode85_chunk(chunk) do
+    :erlang.binary_to_list(chunk)
+    |> Enum.map(&(&1 - 33))
+    |> Enum.reduce(0, fn x, acc -> acc * 85 + x end)
   end
 end
